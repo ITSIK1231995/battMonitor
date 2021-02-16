@@ -48,11 +48,6 @@ uint16_t bg = TFT_BLACK;
 uint16_t fg = TFT_WHITE;
 
 // VOLTAGES 
-const uint16_t voltagePins[] = {27,26,25,2,32,39};
-//const float voltageScale[] = {1.2366,1.55,1.39,1.36,1.36,1.664};
-//const float voltageScale[] = {1.23542,1.5572,1.39583,1.36612,1.37295,1.673};
-const float voltageScale[] = {1,1,1,1,1,1};
-
 const uint16_t voltageDisplyPos[6][2] = {{0,0},{80,0},{160,0},
                                         {0,30},{80,30},{160,30}};
 float voltages [] = {-1,-1,-1,-1,-1,-1};
@@ -61,19 +56,24 @@ const float highMidVoltageTransision = 3.2;
 const float midLowVoltageTransision = 3.0;
 
 // TEMPS
-
-const uint16_t tempsPins[] = {15,13};
-const float tempScale[] = {10.87,10.87};
 const uint16_t tempDisplyPos[2][2] = {{15,65},{130,65}};
 float temps [] = {-1,-1};
 
 const float highMidTempTransision = 40;
 const float midLowTempTransision = 30;
 
-const int SMAPLE_AMOUNT = 3000;
 
 
 BluetoothSerial SerialBT;
+bool bluetoothConected = false;
+bool bluetoothStateChanged = true;
+
+
+//HardwareSerial Serial3(2);
+#define RXD2 2 
+#define TXD2 15
+
+
 
 //====================================================================================
 //                                    Setup
@@ -81,8 +81,8 @@ BluetoothSerial SerialBT;
 void setup()
 {
   Serial.begin(115200); // Used for messages and the C array generator
-
-  reg_b = READ_PERI_REG(SENS_SAR_READ_CTRL2_REG);
+  Serial2.begin(115200, SERIAL_8N1, RXD2, TXD2);
+  
   SerialBT.begin("batteryMonitor#1"); //Bluetooth device name
 
   
@@ -94,26 +94,31 @@ void setup()
   tft.setTextColor(fg, bg);
   tft.fillScreen(bg);
 
-  WRITE_PERI_REG(SENS_SAR_READ_CTRL2_REG, reg_b);
-  SET_PERI_REG_MASK(SENS_SAR_READ_CTRL2_REG, SENS_SAR2_DATA_INV);
-
-  for(int i =0;i<6 ;i++){
-    pinMode(voltagePins[i], INPUT);
-    adcAttachPin(voltagePins[i]);
-    analogReadResolution(11);
-    analogSetAttenuation(ADC_6db);
-  }
-
 }
 
-
-float readAnalogWithSampling(int pin){
-  double readSum = 0;
-  for(int i =0; i<SMAPLE_AMOUNT;i++){
-    readSum+=analogRead(pin);
-  }
-  return readSum/SMAPLE_AMOUNT;
+void writeBluetoothState(){
+  if (bluetoothStateChanged){
+    Serial.print("in here");
+    bluetoothStateChanged = false;
+    if(bluetoothConected){
+      tft.setCursor(0,100);
+      tft.setTextColor(TFT_BLACK, bg);
+      tft.print("awaiting connection");
+      tft.setCursor(0,100);
+      tft.setTextColor(TFT_BLUE, bg);
+      tft.print("bluetooth Conected");
+    }else{
+      tft.setCursor(0,100);
+      tft.setTextColor(TFT_BLACK, bg);
+      tft.print("bluetooth Conected");
+      tft.setCursor(0,100);
+      tft.setTextColor(TFT_BLUE, bg);
+      tft.print("awaiting connection");
+    }
+      
+  }  
 }
+
 
 int getVoltageColor(float voltage){
   if(voltage > highMidVoltageTransision)
@@ -137,18 +142,13 @@ void writeNewVoltage(int sensorNum,float newVoltage){
     tft.print("v");
 }
 
-void handleVoltageSensor(int sensorNum){
-   float newVoltage = ((readAnalogWithSampling(voltagePins[sensorNum])*3.3)/4095)*voltageScale[sensorNum];
-//  float newVoltage = ((1000*3.3)/4095)*voltageScale[sensorNum];
-
+void updateVoltage(int sensorNum,float newVoltage){
   if(int(voltages[sensorNum]*100) != int(newVoltage*100)){
     deleteOldVoltage(sensorNum);
     writeNewVoltage(sensorNum,newVoltage);
     voltages[sensorNum] = newVoltage;
   }
-
 }
-
 
 int getTempColor(float Temp){
   if(Temp > highMidTempTransision)
@@ -173,15 +173,44 @@ void writeNewTemp(int sensorNum,float newTemp){
   tft.println("c");
 }
 
-void handleTempSensor(int sensorNum){
-  float newTemp = ((readAnalogWithSampling(tempsPins[sensorNum])*3.3)/4095)*tempScale[sensorNum];
-//  float newTemp = ((1500*3.3)/4095)*tempScale[sensorNum];
 
 
-  if(int(temps[sensorNum]*100) != int(newTemp*100)){
-    deleteOldTemp(sensorNum);
-    writeNewTemp(sensorNum,newTemp);
-    temps[sensorNum] = newTemp;
+void updateTemp(int sensorNum,float newTemp){
+    if(int(temps[sensorNum]*100) != int(newTemp*100)){
+      deleteOldTemp(sensorNum);
+      writeNewTemp(sensorNum,newTemp);
+      temps[sensorNum] = newTemp;
+  }
+}
+
+void waitForStartFlag(){
+    while(!Serial2.available());
+    byte buff[]  = {0,0,0,0};
+    bool startConditionMeat = false;
+    while(!startConditionMeat){
+      Serial2.readBytes(buff,1);
+      if(buff[0] == 0xff)
+        startConditionMeat = true;
+    }
+}
+
+void getDataAndUpdate(){
+  waitForStartFlag();
+  byte buff[]  = {0,0,0,0};
+  float *Fptr = (float*)buff;
+  
+  for(int i =0; i< 6;i++){
+    if(Serial2.available()>3){
+      Serial2.readBytes(buff,4);
+      updateVoltage(i,*Fptr);
+    }
+  }
+  
+  for(int i =0; i< 2;i++){
+    if(Serial2.available()>3){
+      Serial2.readBytes(buff,4);
+      updateTemp(i,*Fptr);
+    }
   }
 }
 
@@ -190,21 +219,33 @@ void loop()
 {
   tft.loadFont(Final_Frontier_28);
   
-  for(int i =0; i< 6;i++){
-      handleVoltageSensor(i);
-  } 
+  getDataAndUpdate();
 
-    
-    for(int i =0; i< 2;i++){
-      handleTempSensor(i);
-  }
-  tft.unloadFont();
+
+
   if (SerialBT.available()) {
-    for(int i =0; i< 6;i++){
-      SerialBT.println(voltages[i]);
-    }
+    if(!bluetoothConected)
+      bluetoothStateChanged = true;
+    bluetoothConected = true;
+      for(int i =0; i< 6;i++){
+        SerialBT.print(voltages[i]);
+        SerialBT.print(" ");
+      }
+      SerialBT.println();
+      for(int i =0; i< 2;i++){
+        SerialBT.print(temps[i]);
+        SerialBT.print(" ");
+      }
+      SerialBT.println();
+  }
+  else{
+    if(bluetoothConected)
+      bluetoothStateChanged = true;
+    bluetoothConected = false;
+    
   }
 
+  writeBluetoothState();
+  tft.unloadFont();
 
 }
-//====================================================================================
